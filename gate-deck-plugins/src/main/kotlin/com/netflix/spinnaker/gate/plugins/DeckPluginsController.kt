@@ -54,7 +54,7 @@ class DeckPluginsController(
         .header("Content-Type", pluginAsset.contentType)
         .header("Cache-Control",
             CacheControl
-                .maxAge(1, TimeUnit.DAYS)
+                .maxAge(30, TimeUnit.DAYS)
                 .mustRevalidate()
                 .cachePrivate()
                 .headerValue
