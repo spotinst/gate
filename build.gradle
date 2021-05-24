@@ -69,7 +69,7 @@ allprojects {
     }
 
     tasks.withType(JavaExec) {
-      if (System.getProperty('DEBUG', 'false') == 'true') {
+      if (true) {
         jvmArgs '-agentlib:jdwp=transport=dt_socket,server=y,suspend=n,address=8184'
       }
     }
