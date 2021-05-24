@@ -90,6 +90,21 @@ class ClusterController {
     clusterService.getScalingActivities(app, account, clusterName, serverGroupName, provider, region, sourceApp)
   }
 
+  @ApiOperation(value = "Retrieve a list of elastilogs for a server group", response = List.class)
+  @RequestMapping(value = "/{account}/{clusterName}/serverGroups/{serverGroupName}/elastilogs", method = RequestMethod.GET)
+  List<Map> getElastilogs(@PathVariable("application") String app,
+                                 @PathVariable("account") String account,
+                                 @PathVariable("clusterName") String clusterName,
+                                 @PathVariable("serverGroupName") String serverGroupName,
+                                 @RequestParam(value = "provider", defaultValue = "spot", required = false) String provider,
+                                 @RequestParam(value = "elastigroupId", required = true) String elastigroupId,
+                                 @RequestParam(value = "fromDate", required = true) String fromDate,
+                                 @RequestParam(value = "toDate", required = true) String toDate,
+                                 @RequestParam(value = "severity", required = true) String severity,
+                                 @RequestHeader(value = "X-RateLimit-App", required = false) String sourceApp) {
+    clusterService.getElastilogs(app, account, clusterName, serverGroupName, provider, elastigroupId, fromDate, toDate, severity, sourceApp)
+  }
+
   @CompileStatic(TypeCheckingMode.SKIP)
   @ApiOperation(value = "Retrieve a server group's details", response = List.class)
   @RequestMapping(value = "/{account}/{clusterName}/serverGroups/{serverGroupName:.+}", method = RequestMethod.GET)
