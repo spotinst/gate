@@ -71,6 +71,20 @@ public interface ClouddriverService {
       @Query("region") String region);
 
   @Headers("Accept: application/json")
+  @GET(
+      "/applications/{application}/clusters/{account}/{cluster}/{provider}/serverGroups/{serverGroupName}/elastilogs")
+  List getElastilogs(
+      @Path("application") String application,
+      @Path("account") String account,
+      @Path("cluster") String cluster,
+      @Path("provider") String provider,
+      @Path("serverGroupName") String serverGroupName,
+      @Query("elastigroupId") String elastigroupId,
+      @Query("fromDate") String fromDate,
+      @Query("toDate") String toDate,
+      @Query("severity") String severity);
+
+  @Headers("Accept: application/json")
   @GET("/applications/{name}/clusters/{account}/{cluster}/{type}")
   Map getClusterByType(
       @Path("name") String name,
