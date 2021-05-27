@@ -17,61 +17,110 @@
 package com.netflix.spinnaker.gate.controllers
 
 import com.fasterxml.jackson.databind.ObjectMapper
+import com.google.common.cache.CacheBuilder
+import com.google.common.cache.CacheLoader
 import com.netflix.spectator.api.Registry
-import com.netflix.spinnaker.config.ProxyConfigurationProperties
+import com.netflix.spinnaker.config.okhttp3.OkHttpClientProvider
+import com.netflix.spinnaker.gate.api.extension.ProxyConfigProvider
 import com.netflix.spinnaker.kork.web.exceptions.InvalidRequestException
-import com.squareup.okhttp.Request
-import com.squareup.okhttp.RequestBody
-import com.squareup.okhttp.internal.http.HttpMethod
+import com.netflix.spinnaker.kork.web.interceptors.Criticality
+import com.netflix.spinnaker.security.AuthenticatedRequest
+import okhttp3.Request
+import okhttp3.RequestBody
+import okhttp3.internal.http.HttpMethod
+import java.net.SocketException
+import java.util.stream.Collectors
+import javax.servlet.http.HttpServletRequest
+import org.slf4j.LoggerFactory
+import org.springframework.beans.factory.ObjectProvider
 import org.springframework.http.HttpHeaders
 import org.springframework.http.HttpStatus
 import org.springframework.http.MediaType
 import org.springframework.http.ResponseEntity
 import org.springframework.web.bind.annotation.PathVariable
 import org.springframework.web.bind.annotation.RequestMapping
+import org.springframework.web.bind.annotation.RequestMethod.DELETE
 import org.springframework.web.bind.annotation.RequestMethod.GET
 import org.springframework.web.bind.annotation.RequestMethod.POST
+import org.springframework.web.bind.annotation.RequestMethod.PUT
 import org.springframework.web.bind.annotation.RequestParam
 import org.springframework.web.bind.annotation.RestController
 import org.springframework.web.servlet.HandlerMapping
-import java.net.SocketException
-import java.util.stream.Collectors
-import javax.servlet.http.HttpServletRequest
 
+@Criticality(Criticality.Value.LOW)
 @RestController
 @RequestMapping(value = ["/proxies"])
 class ProxyController(
   val objectMapper: ObjectMapper,
   val registry: Registry,
-  val proxyConfigurationProperties: ProxyConfigurationProperties
+  val okHttpClientProvider: OkHttpClientProvider,
+  val proxyConfigProvidersObjectProvider: ObjectProvider<List<ProxyConfigProvider>>
 ) {
+  private val log = LoggerFactory.getLogger(javaClass)
+
+  /**
+   * A single entry cache containing the set of initialized proxies.
+   *
+   * Extension point implementations are not guaranteed to be available at initialization time,
+   * so a [CacheBuilder] is used to ensure we only perform initialization once.
+   */
+  private val proxiesCache = CacheBuilder.newBuilder().maximumSize(1).build(
+    CacheLoader.from { _: String? ->
+      val proxyConfigProviders = proxyConfigProvidersObjectProvider.ifAvailable
+
+      val proxiesById = mutableMapOf<String, Proxy>()
+      proxyConfigProviders?.forEach {
+        it.proxyConfigs.forEach { proxyConfig ->
+          try {
+            proxiesById.put(proxyConfig.id, Proxy(proxyConfig).init(okHttpClientProvider))
+          } catch (e: Exception) {
+            log.error("Failed to initialize proxy (id: ${proxyConfig.id})", e)
+          }
+        }
+      }
+
+      log.info("Initialized ${proxiesById.size} proxies (${proxiesById.keys.joinToString()})")
+      return@from proxiesById
+    }
+  )
 
   val proxyInvocationsId = registry.createId("proxy.invocations")
 
-  @RequestMapping(value = ["/{proxy}/**"], method = [GET, POST])
+  @RequestMapping(value = ["/{proxy}/**"], method = [DELETE, GET, POST, PUT])
   fun any(
-    @PathVariable(value = "proxy") proxy: String,
+    @PathVariable(value = "proxy") proxyId: String,
     @RequestParam requestParams: Map<String, String>,
     httpServletRequest: HttpServletRequest
   ): ResponseEntity<Any> {
-    return request(proxy, requestParams, httpServletRequest)
+    return AuthenticatedRequest.allowAnonymous {
+      return@allowAnonymous request(proxyId, requestParams, httpServletRequest)
+    }
+  }
+
+  @RequestMapping(method = [GET])
+  fun list() : List<SimpleProxyConfig> {
+    return proxies().map { SimpleProxyConfig(
+      it.config.id,
+      it.config.uri
+    ) }
   }
 
   private fun request(
-    proxy: String,
+    proxyId: String,
     requestParams: Map<String, String>,
-    httpServletRequest: HttpServletRequest
+    request: HttpServletRequest
   ): ResponseEntity<Any> {
-    val proxyConfig = proxyConfigurationProperties
-      .proxies
-      .find { it.id.equals(proxy, true) } ?: throw InvalidRequestException("No proxy config found with id '$proxy'")
+    val proxy = proxies()
+      .find { it.config.id.equals(proxyId, true) }
+      ?: throw InvalidRequestException("No proxy config found with id '$proxyId'")
+    val proxyConfig = proxy.config
 
-    val proxyPath = httpServletRequest
+    val proxyPath = request
       .getAttribute(HandlerMapping.PATH_WITHIN_HANDLER_MAPPING_ATTRIBUTE)
       .toString()
-      .substringAfter("/proxies/$proxy")
+      .substringAfter("/proxies/$proxyId")
 
-    val proxiedUrlBuilder = Request.Builder().url(proxyConfig.uri + proxyPath).build().httpUrl().newBuilder()
+    val proxiedUrlBuilder = Request.Builder().url(proxyConfig.uri + proxyPath).build().url().newBuilder()
     for ((key, value) in requestParams) {
       proxiedUrlBuilder.addQueryParameter(key, value)
     }
@@ -82,33 +131,36 @@ class ProxyController(
     var responseBody: String
 
     try {
-      val method = httpServletRequest.method
-      val body = if (HttpMethod.permitsRequestBody(method)) {
+      val method = request.method
+
+      val body = if (HttpMethod.permitsRequestBody(method) && request.contentType != null) {
         RequestBody.create(
-          com.squareup.okhttp.MediaType.parse(httpServletRequest.contentType),
-          httpServletRequest.reader.lines().collect(Collectors.joining(System.lineSeparator()))
+          okhttp3.MediaType.parse(request.contentType),
+          request.reader.lines().collect(Collectors.joining(System.lineSeparator()))
         )
       } else {
         null
       }
 
-      val response = proxyConfig.okHttpClient.newCall(
+      val response = proxy.okHttpClient.newCall(
         Request.Builder().url(proxiedUrl).method(method, body).build()
       ).execute()
       statusCode = response.code()
-      contentType = response.header("Content-Type")
-      responseBody = response.body().string()
+      contentType = response.header("Content-Type") ?: contentType
+      responseBody = response.body()?.string() ?: ""
     } catch (e: SocketException) {
+      log.error("Exception processing proxy request", e)
       statusCode = HttpStatus.GATEWAY_TIMEOUT.value()
       responseBody = e.toString()
     } catch (e: Exception) {
+      log.error("Exception processing proxy request", e)
       responseBody = e.toString()
     }
 
     registry.counter(
       proxyInvocationsId
-        .withTag("proxy", proxy)
-        .withTag("method", httpServletRequest.method)
+        .withTag("proxy", proxyId)
+        .withTag("method", request.method)
         .withTag("status", "${statusCode.toString()[0]}xx")
         .withTag("statusCode", statusCode.toString())
     ).increment()
@@ -135,4 +187,8 @@ class ProxyController(
 
     return ResponseEntity(responseObj, httpHeaders, status)
   }
+
+  private fun proxies() = proxiesCache.get("all").values
+
+  data class SimpleProxyConfig(val id: String, val uri: String)
 }

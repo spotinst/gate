@@ -26,6 +26,7 @@ import com.netflix.spinnaker.fiat.shared.FiatPermissionEvaluator
 import com.netflix.spinnaker.fiat.shared.FiatStatus
 import com.netflix.spinnaker.gate.security.AllowedAccountsSupport
 import com.netflix.spinnaker.gate.services.PermissionService
+import com.netflix.spinnaker.kork.core.RetrySupport
 import com.netflix.spinnaker.kork.dynamicconfig.DynamicConfigService
 import com.netflix.spinnaker.security.AuthenticatedRequest
 import com.netflix.spinnaker.security.User
@@ -40,6 +41,7 @@ import org.springframework.security.core.userdetails.UsernameNotFoundException
 import org.springframework.security.web.authentication.preauth.PreAuthenticatedAuthenticationToken
 import org.springframework.stereotype.Component
 
+import javax.naming.ldap.LdapName
 import java.security.cert.X509Certificate
 import java.time.Clock
 import java.time.Duration
@@ -84,6 +86,8 @@ class X509AuthenticationUserDetailsService implements AuthenticationUserDetailsS
   @Autowired
   Registry registry
 
+  RetrySupport retrySupport = new RetrySupport()
+
   @Value('${x509.required-roles:}#{T(java.util.Collections).emptyList()}')
   List<String> requiredRoles = []
 
@@ -109,13 +113,7 @@ class X509AuthenticationUserDetailsService implements AuthenticationUserDetailsS
 
     def x509 = (X509Certificate) token.credentials
 
-    String email
-    if (userIdentifierExtractor) {
-      email = userIdentifierExtractor.fromCertificate(x509)
-    }
-    if (email == null) {
-      email = emailFromSubjectAlternativeName(x509) ?: token.principal?.toString()
-    }
+    String email = identityFromCertificate(x509) ?: token.principal?.toString()
 
     if (email == null) {
       return null
@@ -150,8 +148,8 @@ class X509AuthenticationUserDetailsService implements AuthenticationUserDetailsS
       if (loginDebounceEnabled) {
         final Duration debounceWindow = Duration.ofSeconds(dynamicConfigService.getConfig(Long, 'x509.loginDebounce.debounceWindowSeconds', TimeUnit.MINUTES.toSeconds(5)))
         final Optional<Instant> lastDebounced = Optional.ofNullable(loginDebounce.getIfPresent(email))
-        UserPermission.View fiatPermission = AuthenticatedRequest.allowAnonymous { fiatPermissionEvaluator.getPermission(email) }
-        shouldLogin = fiatPermission == null ||
+        boolean needsCachedPermission = !fiatPermissionEvaluator.hasCachedPermission(email)
+        shouldLogin = needsCachedPermission ||
           lastDebounced.map({ now.isAfter(it.plus(debounceWindow)) }).orElse(true)
       } else {
         shouldLogin = true
@@ -171,13 +169,15 @@ class X509AuthenticationUserDetailsService implements AuthenticationUserDetailsS
           .withTag("type", "x509")
 
         try {
-          if (rolesExtractor) {
-            permissionService.loginWithRoles(email, roles)
-            log.debug("Successful X509 authentication (user: {}, roleCount: {}, roles: {})", email, roles.size(), roles)
-          } else {
-            permissionService.login(email)
-            log.debug("Successful X509 authentication (user: {})", email)
-          }
+          retrySupport.retry({ ->
+            if (rolesExtractor) {
+              permissionService.loginWithRoles(email, roles)
+              log.debug("Successful X509 authentication (user: {}, roleCount: {}, roles: {})", email, roles.size(), roles)
+            } else {
+              permissionService.login(email)
+              log.debug("Successful X509 authentication (user: {})", email)
+            }
+          }, 5, Duration.ofSeconds(2), false)
 
           id = id.withTag("success", true).withTag("fallback", "none")
         } catch (Exception e) {
@@ -186,7 +186,8 @@ class X509AuthenticationUserDetailsService implements AuthenticationUserDetailsS
             email,
             roles.size(),
             roles,
-            fiatClientConfigurationProperties.legacyFallback
+            fiatClientConfigurationProperties.legacyFallback,
+            e
           )
           id = id.withTag("success", false).withTag("fallback", fiatClientConfigurationProperties.legacyFallback)
 
@@ -236,5 +237,35 @@ class X509AuthenticationUserDetailsService implements AuthenticationUserDetailsS
     cert.getSubjectAlternativeNames().find {
       it.find { it.toString() == RFC822_NAME_ID }
     }?.get(1)
+  }
+
+  /**
+   * Extract identity from an x509 certificate.
+   *
+   * Strategies (in priority order):
+   * - X509UserIdentifierExtractor (when supplied)
+   * - The certificates RFC822 name
+   * - The certificates common name
+   *
+   * @param x509Certificate
+   * @return Extracted identity or null if none available
+   */
+  String identityFromCertificate(X509Certificate x509Certificate) {
+    String identity
+
+    if (userIdentifierExtractor) {
+      identity = userIdentifierExtractor.fromCertificate(x509Certificate)
+    }
+    if (identity == null) {
+      identity = emailFromSubjectAlternativeName(x509Certificate)
+      if (identity == null) {
+        // no subject alternative name, fallback to subject common name
+        String dn = x509Certificate.getSubjectX500Principal().getName();
+        LdapName ldapName = new LdapName(dn)
+        identity = ldapName.getRdns().find { it.getType().equalsIgnoreCase("CN")}?.value?.toString()
+      }
+    }
+
+    return identity
   }
 }

@@ -15,14 +15,20 @@
  */
 package com.netflix.spinnaker.gate.config;
 
+import com.netflix.spectator.api.Registry;
 import com.netflix.spinnaker.gate.ratelimit.RateLimitPrincipalProvider;
 import com.netflix.spinnaker.gate.ratelimit.RateLimiter;
+import com.netflix.spinnaker.gate.ratelimit.RateLimitingFilter;
 import com.netflix.spinnaker.gate.ratelimit.RedisRateLimitPrincipalProvider;
 import com.netflix.spinnaker.gate.ratelimit.RedisRateLimiter;
 import com.netflix.spinnaker.gate.ratelimit.StaticRateLimitPrincipalProvider;
+import com.netflix.spinnaker.gate.security.RequestIdentityExtractor;
+import java.util.List;
+import java.util.Optional;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnExpression;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnMissingBean;
+import org.springframework.boot.web.servlet.FilterRegistrationBean;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import redis.clients.jedis.JedisPool;
@@ -50,5 +56,23 @@ public class RateLimiterConfig {
   @ConditionalOnMissingBean(RateLimitPrincipalProvider.class)
   RateLimitPrincipalProvider staticRateLimiterPrincipalProvider() {
     return new StaticRateLimitPrincipalProvider(rateLimiterConfiguration);
+  }
+
+  @Bean
+  FilterRegistrationBean rateLimitingFilter(
+      RateLimiter rateLimiter,
+      Registry registry,
+      RateLimitPrincipalProvider rateLimitPrincipalProvider,
+      Optional<List<RequestIdentityExtractor>> requestIdentityExtractors) {
+    FilterRegistrationBean frb =
+        new FilterRegistrationBean(
+            new RateLimitingFilter(
+                rateLimiter,
+                registry,
+                rateLimitPrincipalProvider,
+                requestIdentityExtractors.orElse(null)));
+
+    frb.setOrder(rateLimiterConfiguration.getFilterOrder());
+    return frb;
   }
 }

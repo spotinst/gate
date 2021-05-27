@@ -25,8 +25,9 @@ import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty
 import org.springframework.scheduling.annotation.Scheduled
 import org.springframework.web.bind.annotation.GetMapping
 import org.springframework.web.bind.annotation.RequestMapping
-import org.springframework.web.bind.annotation.RequestMethod
 import org.springframework.web.bind.annotation.RestController
+import retrofit.RetrofitError
+
 import java.util.concurrent.atomic.AtomicReference
 
 @CompileStatic
@@ -75,21 +76,27 @@ class PagerDutyController {
   @Scheduled(fixedDelay = 300000L)
   void refreshPagerDuty() {
     try {
-      log.info("Refreshing PagerDuty service list")
       List<Map> services = fetchAllServices()
       log.info("Fetched {} PagerDuty services", services?.size())
       pagerDutyServicesCache.set(services)
     } catch (e) {
-      log.error("Unable to refresh PagerDuty service list", e)
+      if (e instanceof RetrofitError && e.response?.status == 429) {
+        log.warn("Unable to refresh PagerDuty service list (throttled!)")
+      } else {
+        log.error("Unable to refresh PagerDuty service list", e)
+      }
     }
 
     try {
-      log.info("Refreshing PagerDuty oncall list")
       List<Map> onCalls = fetchAllOnCalls()
       log.info("Fetched {} PagerDuty onCall", onCalls?.size())
       pagerDutyOnCallCache.set(onCalls)
     } catch (e) {
-      log.error("Unable to refresh PagerDuty onCall list", e)
+      if (e instanceof RetrofitError && e.response?.status == 429) {
+        log.warn("Unable to refresh PagerDuty onCall list (throttled!)")
+      } else {
+        log.error("Unable to refresh PagerDuty onCall list", e)
+      }
     }
   }
 

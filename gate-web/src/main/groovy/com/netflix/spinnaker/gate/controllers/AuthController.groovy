@@ -84,14 +84,26 @@ class AuthController {
 
   @ApiOperation(value = "Get service accounts", response = List.class)
   @RequestMapping(value = "/user/serviceAccounts", method = RequestMethod.GET)
-  List<String> getServiceAccounts(@ApiIgnore @SpinnakerUser User user) {
-    permissionService.getServiceAccounts(user)
+  List<String> getServiceAccounts(@ApiIgnore @SpinnakerUser User user,
+                                  @RequestParam(name = "application", required = false) String application) {
+
+    String appName = Optional.ofNullable(application)
+      .map({ s -> s.trim() })
+      .filter({ s -> !s.isEmpty()})
+      .orElse(null);
+
+
+    if (appName == null) {
+      return permissionService.getServiceAccounts(user)
+    }
+
+    return permissionService.getServiceAccountsForApplication(user, appName)
   }
 
   @ApiOperation(value = "Get logged out message", response = String.class)
   @RequestMapping(value = "/loggedOut", method = RequestMethod.GET)
   String loggedOut() {
-    return LOGOUT_MESSAGES[r.nextInt(LOGOUT_MESSAGES.size()+1)]
+    return LOGOUT_MESSAGES[r.nextInt(LOGOUT_MESSAGES.size())]
   }
 
   /**
@@ -117,8 +129,8 @@ class AuthController {
     URL toURL
     try {
       toURL = new URL(to)
-    } catch (MalformedURLException malEx) {
-      log.warn "Malformed redirect URL: $to\n${ExceptionUtils.getStackTrace(malEx)}"
+    } catch (MalformedURLException e) {
+      log.warn("Malformed redirect URL {}", to, e)
       return false
     }
 

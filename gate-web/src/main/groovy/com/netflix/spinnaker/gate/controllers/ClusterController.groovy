@@ -98,11 +98,10 @@ class ClusterController {
                                  @PathVariable("serverGroupName") String serverGroupName,
                                  @RequestParam(value = "provider", defaultValue = "spot", required = false) String provider,
                                  @RequestParam(value = "elastigroupId", required = true) String elastigroupId,
-                                 @RequestParam(value = "fromDate", required = true) String fromDate,
-                                 @RequestParam(value = "toDate", required = true) String toDate,
+                                 @RequestParam(value = "period", required = true) String period,
                                  @RequestParam(value = "severity", required = true) String severity,
                                  @RequestHeader(value = "X-RateLimit-App", required = false) String sourceApp) {
-    clusterService.getElastilogs(app, account, clusterName, serverGroupName, provider, elastigroupId, fromDate, toDate, severity, sourceApp)
+    clusterService.getElastilogs(app, account, clusterName, serverGroupName, provider, elastigroupId, period, severity, sourceApp)
   }
 
   @CompileStatic(TypeCheckingMode.SKIP)

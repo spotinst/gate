@@ -17,13 +17,10 @@
 package com.netflix.spinnaker.gate.config
 
 import com.netflix.spectator.api.Registry
+import com.netflix.spinnaker.gate.filters.ContentCachingFilter
 import com.netflix.spinnaker.gate.interceptors.RequestContextInterceptor
 import com.netflix.spinnaker.gate.interceptors.RequestIdInterceptor
-import com.netflix.spinnaker.gate.interceptors.RequestLoggingInterceptor
-import com.netflix.spinnaker.gate.interceptors.RequestSheddingInterceptor
-import com.netflix.spinnaker.gate.ratelimit.RateLimitPrincipalProvider
-import com.netflix.spinnaker.gate.ratelimit.RateLimiter
-import com.netflix.spinnaker.gate.ratelimit.RateLimitingInterceptor
+
 import com.netflix.spinnaker.gate.retrofit.UpstreamBadRequest
 import com.netflix.spinnaker.kork.dynamicconfig.DynamicConfigService
 import com.netflix.spinnaker.kork.web.interceptors.MetricsInterceptor
@@ -37,7 +34,6 @@ import org.springframework.http.HttpStatus
 import org.springframework.web.bind.annotation.ControllerAdvice
 import org.springframework.web.bind.annotation.ExceptionHandler
 import org.springframework.web.bind.annotation.ResponseBody
-import org.springframework.web.filter.ShallowEtagHeaderFilter
 import org.springframework.web.servlet.config.annotation.ContentNegotiationConfigurer
 import org.springframework.web.servlet.config.annotation.InterceptorRegistry
 import org.springframework.web.servlet.config.annotation.WebMvcConfigurer
@@ -53,12 +49,6 @@ public class GateWebConfig implements WebMvcConfigurer {
   @Autowired
   Registry registry
 
-  @Autowired(required = false)
-  RateLimitPrincipalProvider rateLimiterPrincipalProvider
-
-  @Autowired(required = false)
-  RateLimiter rateLimiter
-
   @Autowired
   DynamicConfigService dynamicConfigService
 
@@ -67,9 +57,6 @@ public class GateWebConfig implements WebMvcConfigurer {
 
   @Value('${rate-limit.learning:true}')
   Boolean rateLimitLearningMode
-
-  @Value('${request-logging.enabled:false}')
-  Boolean requestLogging
 
   @Override
   public void addInterceptors(InterceptorRegistry registry) {
@@ -80,17 +67,7 @@ public class GateWebConfig implements WebMvcConfigurer {
     )
 
     registry.addInterceptor(new RequestIdInterceptor())
-
-    if (requestLogging) {
-      registry.addInterceptor(new RequestLoggingInterceptor())
-    }
-
-    if (rateLimiter != null) {
-      registry.addInterceptor(new RateLimitingInterceptor(rateLimiter, spectatorRegistry, rateLimiterPrincipalProvider))
-    }
-
     registry.addInterceptor(new RequestContextInterceptor())
-    registry.addInterceptor(new RequestSheddingInterceptor(dynamicConfigService, this.registry))
   }
 
   @Bean
@@ -99,8 +76,9 @@ public class GateWebConfig implements WebMvcConfigurer {
   }
 
   @Bean
-  Filter eTagFilter() {
-    new ShallowEtagHeaderFilter()
+  Filter contentCachingFilter() {
+    // This filter simply buffers the response so that Content-Length header can be set
+    return new ContentCachingFilter()
   }
 
   @Bean
