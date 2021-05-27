@@ -80,8 +80,7 @@ public interface ClouddriverService {
       @Path("provider") String provider,
       @Path("serverGroupName") String serverGroupName,
       @Query("elastigroupId") String elastigroupId,
-      @Query("fromDate") String fromDate,
-      @Query("toDate") String toDate,
+      @Query("period") String period,
       @Query("severity") String severity);
 
   @Headers("Accept: application/json")
