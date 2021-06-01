@@ -64,6 +64,10 @@ class ClusterService {
     clouddriverServiceSelector.select().getScalingActivities(app, account, clusterName, provider, serverGroupName, region)
   }
 
+  List<Map> getElastilogs(String app, String account, String clusterName, String serverGroupName, String provider, String elastigroupId, String period, String severity, String selectorKey) {
+    clouddriverServiceSelector.select().getElastilogs(app, account, clusterName, provider, serverGroupName, elastigroupId, period, severity)
+  }
+
   Map getTargetServerGroup(String app, String account, String clusterName, String cloudProviderType, String scope, String target, Boolean onlyEnabled, Boolean validateOldest, String selectorKey) {
     try {
       return clouddriverServiceSelector.select().getTargetServerGroup(app, account, clusterName, cloudProviderType, scope, target, onlyEnabled, validateOldest)
